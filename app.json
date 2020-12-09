@@ -1,0 +1,6 @@
+{
+		"name": "Discord Translate BOT",
+		"description": "メッセージをGoogle翻訳を利用して翻訳します。",
+		"repository": "https://github.com/Charlotte417/DiscordMessageTranslate,
+		"keywords": ["Python", "Discord", "Bot"]
+}
