@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.INFO)
 
 @client.event
 async def on_ready():
+    logging.info('on_ready')
     print('on_ready')
     return
 
@@ -23,6 +24,7 @@ async def on_message(message):
     '''
     メッセージが送信された
     '''
+    logging.info('on_message')
     # チャンネル限定のメッセージにする
     if message.content.startswith(local_message_prefix):
         return
@@ -32,7 +34,7 @@ async def on_message(message):
     # システムメッセージ
     if message.is_system():
         return
-    # チャンネル内のメッセージをすべて消す(現在のところ開発用)
+    # チャンネル内のメッセージをすべて消す
     if message.content == '/armageddon':
         await armageddon(message.channel)
         return
@@ -51,9 +53,10 @@ async def on_message(message):
 @client.event
 async def on_raw_message_edit(payload):
     '''
-    メッセージの状態が変化したとき
-    編集されたときのみ利用
+    メッセージの状態が変化した
+    このBOTではメッセージが編集されたときのみ利用
     '''
+    logging.info('on_raw_message_edit')
     data = payload.data
     if data['edited_timestamp'] is not None:
         target_channel = client.get_channel(payload.channel_id)
@@ -66,10 +69,13 @@ async def on_raw_message_edit(payload):
 @client.event
 async def on_raw_message_delete(payload):
     '''
-    メッセージが消去されたとき
+    メッセージが消去された
+    
     '''
+    logging.info('on_raw_message_delete')
     source_channel = client.get_channel(payload.channel_id)
     target_channels = get_target_channels(source_channel)
+    # 消去されたメッセージがユーザかBOTか判別できないので全てチェックする
     for target_channel in target_channels:
         async for target_message in target_channel.history():
             if target_message.is_system() == True:
@@ -86,6 +92,10 @@ async def on_raw_message_delete(payload):
 
 @client.event
 async def on_guild_channel_pins_update(channel, last_pin):
+    '''
+    ピン留めが更新された
+    '''
+    logging.info('on_guild_channel_pins_update')
     pinned_messages = await channel.pins()
     target_channels = get_target_channels(channel)
     if len(pinned_messages) >= 1:
@@ -126,25 +136,31 @@ async def on_guild_channel_pins_update(channel, last_pin):
 
 
 async def send_message(message, **kwargs):
-    message_url = create_message_url(message.channel.guild.id, message.channel.id, message.id)
+    '''
+    メッセージを送信
+    '''
+    logging.info('send_message')
+    is_url_start = re.search(r'^.*://', content, re.DOTALL | re.MULTILINE)
+    content = replace_mention(message.content)
+    content_lines = content.splitlines()
     source_channel = message.channel
     source_channel_data = get_channel_data(source_channel.name)
     # 送信先のチャンネルを取得
     target_channels = get_target_channels(source_channel)
     for target_channel in target_channels:
         target_channel_data = get_channel_data(target_channel.name)
-        formatted_content = None
-        if len(target_channel_data) == 0 or message.content.startswith('.+://'):
-            formatted_content = format_message(message_url, source_channel.mention, message.author.display_name, message.content)
-        # elif target_channel_data['base_channel'] == source_channel_data['base_channel']:
+        formatted_content = ''
+        # 送信先のチャンネル名に言語コードが含まれないか、ユーザが送信したメッセージがURLと思われる文字列から始まる
+        if (len(target_channel_data) == 0) or (is_url is not None):
+            formatted_content = format_content(message, message.content)
         else:
-            content = replace_string(message.content)
-            content = google_trans_new_translate(content, source_channel_data['channel_language'], target_channel_data['channel_language'])
-            content = replace_link(content, message.content)
-            formatted_content = format_message(message_url, source_channel.mention, message.author.display_name, content)
+            tmp_content = google_trans_new_translate(content_lines, source_channel_data['channel_language'], target_channel_data['channel_language'])
+            tmp_content = replace_links(tmp_content, message.content)
+            tmp_content = format_content(message, tmp_content)
         event_type = kwargs.get('event_type')
+        # 通常のメッセージ送信
         if event_type is None:
-            # 添付ファイルの有無をチェック
+            # 添付ファイルの有無を確認
             attachment_count = len(message.attachments)
             if attachment_count == 0:
                 await target_channel.send(content=formatted_content)
@@ -156,8 +172,9 @@ async def send_message(message, **kwargs):
                 await target_channel.send(content=formatted_content, files=files)
             continue
         else:
+            # 編集時
             if event_type == 'EDIT':
-                print('Edit')
+                logging.info('EDIT')
                 async for target_message in target_channel.history():
                     if target_message.is_system() == False:
                         if target_message.author.id == client.user.id:
@@ -166,7 +183,9 @@ async def send_message(message, **kwargs):
                                 await target_message.edit(content=formatted_content)
                                 break
                 continue
+            # メッセージへ返信
             if event_type == 'REPLY':
+                logging.info('REPLY')
                 reply_channel_id = kwargs.get('reply_channel_id')
                 reply_message_id = kwargs.get('reply_message_id')
                 reply_channel = client.get_channel(reply_channel_id)
@@ -199,21 +218,47 @@ async def send_message(message, **kwargs):
     return
 
 
-def format_message(message_url, channel_name, author, content):
-    header = '*' + message_url + '\nChannel: ' + channel_name + ' / ' + author + ':*\n>>> '
+def format_content(message, content):
+    '''
+    BOTの投稿用にメッセージを成形
+    '''
+    logging.info('format_content')
+    message_url = create_message_url(message)
+    channel = message.channel.mention
+    author = message.author.display_name
+    header = '*' + message_url + '\nChannel: ' + channel + ' / ' + author + ':*\n>>> '
     return header + content
 
 
+def create_message_url(message):
+    '''
+    メッセージのURLを生成
+    '''
+    logging.info('create_message_url')
+    guild_id = message.channel.guild.id
+    channel_id = message.channel.id
+    message_id = message.id
+    result = 'https://discordapp.com/channels/'
+    result += str(server_id) + '/' + str(channel_id) + '/' + str(message_id)
+    return result
+
+
 def get_target_channels(channel):
+    '''
+    チャンネルが属するカテゴリに含まれるチャンネルを返す
+    ただし自身は返さない
+    '''
     result = []
-    category = channel.category
-    for tmp_channel in category.channels:
+    for tmp_channel in channel.category.channels:
         if tmp_channel.id != channel.id:
             result.append(tmp_channel)
     return result
 
 
 def get_channel_data(channel_name):
+    '''
+    チャンネル名からベースのチャンネル名とチャンネルの言語を分けて返す
+    '''
     result = {}
     index = channel_name.rfind(channel_language_separator)
     if index != -1:
@@ -224,6 +269,14 @@ def get_channel_data(channel_name):
 
 
 def get_message_data(message):
+    '''
+    ユーザが投稿したメッセージの場合はメッセージから、自身が投稿したメッセージの場合は内容から以下の情報を返す
+    ・ギルドID
+    ・チャンネルID
+    ・メッセージID
+    ・チャンネル名
+    ・チャンネルの言語
+    '''
     result = {}
     channel_name = ''
     # BOTが送信したメッセージではない
@@ -253,6 +306,10 @@ def get_message_data(message):
 
 
 async def armageddon(channel):
+    '''
+    チャンネル内のメッセージをすべて消す
+    '''
+    logging.info('armageddon')
     await channel.purge()
     return
 
@@ -276,18 +333,17 @@ def googletrans_translate(content, src_lang, dest_lang):
     return result
 
 
-def google_trans_new_translate(content, source_language, target_language):
+def google_trans_new_translate(content_lines, source_language, target_language):
     result = ''
     translator = google_translator(url_suffix="co.jp")
-    # google_trans_newは改行を捨てるようなので1行ごとに翻訳する
-    lines = content.splitlines()
-    for line in lines:
+    # google_trans_newは改行を捨ててしまうようなので1行ごとに翻訳する
+    for line in content_lines:
         while True:
             try:
                 # 日本語⇔韓国語の翻訳をするときは英語を経由
-                if(source_language == 'ko' and target_language == 'ja') or (source_language == 'ja' and target_language == 'ko'):
-                    google_trans_new_translate = translator.translate(line, lang_src=source_language, lang_tgt='en')
-                    result += translator.translate(google_trans_new_translate, lang_src='en', lang_tgt=target_language)
+                if(source_language == 'ja' and target_language == 'ko') or (source_language == 'ko' and target_language == 'ja'):
+                    tmp = translator.translate(line, lang_src=source_language, lang_tgt='en')
+                    result += translator.translate(tmp, lang_src='en', lang_tgt=target_language)
                 else:
                     result += translator.translate(line, lang_src=source_language, lang_tgt=target_language)
                 result += '\n'
@@ -297,10 +353,21 @@ def google_trans_new_translate(content, source_language, target_language):
     return result
 
 
-def replace_link(content, original_content):
+def replace_mention(content):
+    '''
+    文字列に含まれる@everyone, @hereを一時的に置換する
+    '''
+    result = content
+    replace_strings = {'@everyone':'<@!?901>', '@here':'<@!?902>'}
+    for key, value in replace_strings.items():
+        result = re.sub(key, value, result)
+    return result
+
+
+def replace_links(content, original_content):
     '''
     翻訳後のメッセージからリンク文字列を置換する
-    翻訳後のメッセージのみだと不完全なことが多いので、オリジナルのメッセージから出現順で置換する
+    翻訳後のメッセージを利用すると必要な文字列が不完全なことが多いので、オリジナルの文字列を使用して、その出現順に置換する
     '''
     result = content
     # チャンネルリンク、ユーザ宛てメンション、ロール宛てメンションの置換
@@ -317,23 +384,6 @@ def replace_link(content, original_content):
                         result = result.replace(target_match.group(), original_match.group())
     # @everyone, @hereの置換
     replace_strings = {r'<@!+\s?\?+\s?901>':'@everyone', r'<@!+\s?\?+\s?902>':'@here'}
-    for key, value in replace_strings.items():
-        result = re.sub(key, value, result)
-    return result
-
-
-def create_message_url(server_id, channel_id, message_id):
-    result = 'https://discordapp.com/channels/'
-    result += str(server_id) + '/' + str(channel_id) + '/' + str(message_id)
-    return result
-
-
-def replace_string(content):
-    '''
-    メッセージ内の@everyone, @hereを一時的に置換する
-    '''
-    result = content
-    replace_strings = {'@everyone':'<@!?901>', '@here':'<@!?902>'}
     for key, value in replace_strings.items():
         result = re.sub(key, value, result)
     return result
