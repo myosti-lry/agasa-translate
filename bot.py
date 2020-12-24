@@ -15,7 +15,6 @@ logging.basicConfig(level=logging.INFO)
 @client.event
 async def on_ready():
     logging.info('on_ready')
-    print('on_ready')
     return
 
 
@@ -140,7 +139,7 @@ async def send_message(message, **kwargs):
     メッセージを送信
     '''
     logging.info('send_message')
-    is_url_start = re.search(r'^.*://', content, re.DOTALL | re.MULTILINE)
+    is_url_start = re.search(r'^^[a-zA-Z]*://', message.content, re.DOTALL)
     content = replace_mention(message.content)
     content_lines = content.splitlines()
     source_channel = message.channel
@@ -151,12 +150,12 @@ async def send_message(message, **kwargs):
         target_channel_data = get_channel_data(target_channel.name)
         formatted_content = ''
         # 送信先のチャンネル名に言語コードが含まれないか、ユーザが送信したメッセージがURLと思われる文字列から始まる
-        if (len(target_channel_data) == 0) or (is_url is not None):
+        if (len(target_channel_data) == 0) or (is_url_start is not None):
             formatted_content = format_content(message, message.content)
         else:
             tmp_content = google_trans_new_translate(content_lines, source_channel_data['channel_language'], target_channel_data['channel_language'])
             tmp_content = replace_links(tmp_content, message.content)
-            tmp_content = format_content(message, tmp_content)
+            formatted_content = format_content(message, tmp_content)
         event_type = kwargs.get('event_type')
         # 通常のメッセージ送信
         if event_type is None:
@@ -239,7 +238,7 @@ def create_message_url(message):
     channel_id = message.channel.id
     message_id = message.id
     result = 'https://discordapp.com/channels/'
-    result += str(server_id) + '/' + str(channel_id) + '/' + str(message_id)
+    result += str(guild_id) + '/' + str(channel_id) + '/' + str(message_id)
     return result
 
 
