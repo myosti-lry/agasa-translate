@@ -53,15 +53,49 @@ async def on_message(message):
 async def on_raw_message_edit(payload):
     '''
     メッセージの状態が変化した
-    このBOTではメッセージが編集されたときのみ利用
+    
     '''
+    # 編集もピン留めの更新も都度書き換えてしまうことになるので
     logging.info('on_raw_message_edit')
     data = payload.data
+    channel = client.get_channel(payload.channel_id)
+    source_message = await channel.fetch_message(payload.message_id)
+    source_message_data = get_message_data(source_message)
     if data['edited_timestamp'] is not None:
-        target_channel = client.get_channel(payload.channel_id)
-        target_message = await target_channel.fetch_message(payload.message_id)
-        if target_message.author.bot == False:
-            await send_message(target_message, event_type='EDIT')
+        if source_message.author.bot == False:
+            if (source_message_data['edited_timestamp'] is None) or (source_message_data['edited_timestamp'] == str(data['edited_timestamp'])):
+                await send_message(source_message, event_type='EDIT', edited_timestamp=data['edited_timestamp'])
+    # ピン留め
+    for target_channel in get_target_channels(channel):
+        async for target_message in target_channel.history():
+            if target_message.is_system() == True:
+                continue
+            target_message_data = get_message_data(target_message)
+            print('Message data:')
+            print(target_message_data)
+            if target_message_data['message_id'] == source_message_data['message_id']:
+                # ピン留めがすでにあったとき
+                if (source_message.pinned == False) and (target_message.pinned == True):
+                    await target_message.unpin()
+                    break
+                elif (source_message.pinned == True) and (target_message.pinned == False):
+                    await target_message.pin()
+    return
+
+
+async def update_pinned_messages():
+    '''
+    '''
+    logginginfo('')
+    return
+
+
+async def remove_pinned_messages(channel):
+    '''
+    '''
+    logginginfo('')
+    target_channels = get_target_channels(channel)
+     
     return
 
 
@@ -89,73 +123,30 @@ async def on_raw_message_delete(payload):
     return
 
 
-@client.event
-async def on_guild_channel_pins_update(channel, last_pin):
-    '''
-    ピン留めが更新された
-    '''
-    logging.info('on_guild_channel_pins_update')
-    pinned_messages = await channel.pins()
-    target_channels = get_target_channels(channel)
-    if len(pinned_messages) >= 1:
-        for target_channel in target_channels:
-            async for target_message in target_channel.history():
-                # メッセージがシステムメッセージ
-                if target_message.is_system() == True:
-                    continue
-                # メッセージがBOTかつ自身が送信したメッセージではない
-                if target_message.author.bot == True and target_message.author.id != client.user.id:
-                    continue
-                target_message_id = None
-                if target_message.author.bot == False:
-                    target_message_id = target_message.id
-                else:
-                    target_message_data = get_message_data(target_message)
-                    target_message_id = target_message_data['message_id']
-                for pinned_message in pinned_messages:
-                    pinned_message_id = None
-                    if pinned_message.author.bot == False:
-                        pinned_message_id = pinned_message.id
-                    else:
-                        pinned_message_data = get_message_data(pinned_message)
-                        pinned_message_id = pinned_message_data['message_id']
-                    if pinned_message_id == target_message_id:
-                        if target_message.pinned == False:
-                            await target_message.pin()
-                    else:
-                        if target_message.pinned == True:
-                            await target_message.unpin()
-    # ピン留めの更新後にメッセージがない
-    else:
-        for target_channel in target_channels:
-            async for target_message in target_channel.history():
-                if target_message.pinned == True:
-                    await target_message.unpin()
-    return
-
-
 async def send_message(message, **kwargs):
     '''
     メッセージを送信
     '''
     logging.info('send_message')
-    is_url_start = re.search(r'^^[a-zA-Z]*://', message.content, re.DOTALL)
-    content = replace_mention(message.content)
-    content_lines = content.splitlines()
-    source_channel = message.channel
-    source_channel_data = get_channel_data(source_channel.name)
+    is_url_start = re.search(r'^[a-zA-Z]*://', message.content, re.DOTALL)
+    message_url = create_message_url(message)
+    channel_mention = message.channel.mention
+    author = message.author.display_name
+    content_lines = replace_mention(message.content).splitlines()
+    source_channel_data = get_channel_data(message.channel.name)
     # 送信先のチャンネルを取得
-    target_channels = get_target_channels(source_channel)
+    target_channels = get_target_channels(message.channel)
+    print(target_channels)
     for target_channel in target_channels:
         target_channel_data = get_channel_data(target_channel.name)
         formatted_content = ''
         # 送信先のチャンネル名に言語コードが含まれないか、ユーザが送信したメッセージがURLと思われる文字列から始まる
         if (len(target_channel_data) == 0) or (is_url_start is not None):
-            formatted_content = format_content(message, message.content)
+            formatted_content = format_content(message_url, channel_mention, author, message.content)
         else:
             tmp_content = google_trans_new_translate(content_lines, source_channel_data['channel_language'], target_channel_data['channel_language'])
             tmp_content = replace_links(tmp_content, message.content)
-            formatted_content = format_content(message, tmp_content)
+            formatted_content = format_content(message_url, channel_mention, author, tmp_content)
         event_type = kwargs.get('event_type')
         # 通常のメッセージ送信
         if event_type is None:
@@ -163,12 +154,14 @@ async def send_message(message, **kwargs):
             attachment_count = len(message.attachments)
             if attachment_count == 0:
                 await target_channel.send(content=formatted_content)
+                print(0)
             else:
                 files = []
                 for attachment in message.attachments:
                     file = await attachment.to_file()
                     files.append(file)
                 await target_channel.send(content=formatted_content, files=files)
+                print(1)
             continue
         else:
             # 編集時
@@ -217,16 +210,12 @@ async def send_message(message, **kwargs):
     return
 
 
-def format_content(message, content):
+def format_content(message_url, channel_mention , author, content):
     '''
     BOTの投稿用にメッセージを成形
     '''
     logging.info('format_content')
-    message_url = create_message_url(message)
-    channel = message.channel.mention
-    author = message.author.display_name
-    header = '*' + message_url + '\nChannel: ' + channel + ' / ' + author + ':*\n>>> '
-    return header + content
+    return '*' + message_url + '\nChannel: ' + channel_mention + ' / ' + author + ':*\n>>> ' + content
 
 
 def create_message_url(message):
@@ -275,6 +264,7 @@ def get_message_data(message):
     ・メッセージID
     ・チャンネル名
     ・チャンネルの言語
+    ・メッセージの更新時間(含まれる場合)
     '''
     result = {}
     channel_name = ''
@@ -284,6 +274,7 @@ def get_message_data(message):
         channel_name = message.channel.name
     # 自身が送信したメッセージ
     elif message.author.id == client.user.id:
+        # ギルドID、チャンネルID、メッセージIDを取り出す
         pattern = r'(?<=^\*https\://discordapp\.com/channels/)(?P<guild_id>\d+)/(?P<channel_id>\d+)/(?P<message_id>\d+)(?=$)'
         c = re.compile(pattern, re.DOTALL | re.MULTILINE)
         match = c.search(message.content)
@@ -293,14 +284,12 @@ def get_message_data(message):
             result['message_id'] = int(match.group('message_id'))
             channel = client.get_channel(result['channel_id'])
             channel_name = channel.name
-    else:
-        return
     result['channel'] = channel_name
     if channel_language_separator in channel_name:
         channel_data = get_channel_data(channel_name)
         if len(channel_data) > 0:
             result['base_channel'] = channel_data['base_channel']
-            result['channel_language'] = channel_data['channel_language']
+            result['channel_language'] = channel_data['channel_language'] 
     return result
 
 
