@@ -52,10 +52,8 @@ async def on_message(message):
 @client.event
 async def on_raw_message_edit(payload):
     '''
-    メッセージの状態が変化した
-    
+    メッセージの状態が変更されたとき(編集・ピン留め)
     '''
-    # 編集もピン留めの更新も都度書き換えてしまうことになるので
     logging.info('on_raw_message_edit')
     data = payload.data
     channel = client.get_channel(payload.channel_id)
@@ -63,16 +61,13 @@ async def on_raw_message_edit(payload):
     source_message_data = get_message_data(source_message)
     if data['edited_timestamp'] is not None:
         if source_message.author.bot == False:
-            if (source_message_data['edited_timestamp'] is None) or (source_message_data['edited_timestamp'] == str(data['edited_timestamp'])):
-                await send_message(source_message, event_type='EDIT', edited_timestamp=data['edited_timestamp'])
+            await send_message(source_message, event_type='EDIT', edited_timestamp=data['edited_timestamp'])
     # ピン留め
     for target_channel in get_target_channels(channel):
         async for target_message in target_channel.history():
             if target_message.is_system() == True:
                 continue
             target_message_data = get_message_data(target_message)
-            print('Message data:')
-            print(target_message_data)
             if target_message_data['message_id'] == source_message_data['message_id']:
                 # ピン留めがすでにあったとき
                 if (source_message.pinned == False) and (target_message.pinned == True):
@@ -80,6 +75,7 @@ async def on_raw_message_edit(payload):
                     break
                 elif (source_message.pinned == True) and (target_message.pinned == False):
                     await target_message.pin()
+                    break
     return
 
 
@@ -136,7 +132,6 @@ async def send_message(message, **kwargs):
     source_channel_data = get_channel_data(message.channel.name)
     # 送信先のチャンネルを取得
     target_channels = get_target_channels(message.channel)
-    print(target_channels)
     for target_channel in target_channels:
         target_channel_data = get_channel_data(target_channel.name)
         formatted_content = ''
@@ -154,14 +149,12 @@ async def send_message(message, **kwargs):
             attachment_count = len(message.attachments)
             if attachment_count == 0:
                 await target_channel.send(content=formatted_content)
-                print(0)
             else:
                 files = []
                 for attachment in message.attachments:
                     file = await attachment.to_file()
                     files.append(file)
                 await target_channel.send(content=formatted_content, files=files)
-                print(1)
             continue
         else:
             # 編集時
@@ -305,12 +298,13 @@ async def armageddon(channel):
 def googletrans_translate(content, src_lang, dest_lang):
     result = None
     translator = Translator()
+    # 英語をに翻訳してから翻訳する言語
+    through__language = {'ja', 'ko', 'ru'}
     # 翻訳に成功するまでループ
     # https://github.com/ssut/py-googletrans/issues/234#issuecomment-722203541
     while True:
         try:
-            # 日本語⇔韓国語の翻訳をするときは英語を経由
-            if(src_lang == 'ko' and dest_lang == 'ja') or (src_lang == 'ja' and dest_lang == 'ko'):
+            if (source_language in through__language) and (target_language in through__language):
                 tmp = translator.translate(content, src=src_lang, dest='en')
                 result = translator.translate(tmp.text, src='en', dest=dest_lang).text
             else:
@@ -324,14 +318,16 @@ def googletrans_translate(content, src_lang, dest_lang):
 def google_trans_new_translate(content_lines, source_language, target_language):
     result = ''
     translator = google_translator(url_suffix="co.jp")
+    # 英語をに翻訳してから翻訳する言語
+    through__language = {'ja', 'ko', 'ru'}
     # google_trans_newは改行を捨ててしまうようなので1行ごとに翻訳する
     for line in content_lines:
         while True:
             try:
-                # 日本語⇔韓国語の翻訳をするときは英語を経由
-                if(source_language == 'ja' and target_language == 'ko') or (source_language == 'ko' and target_language == 'ja'):
-                    tmp = translator.translate(line, lang_src=source_language, lang_tgt='en')
-                    result += translator.translate(tmp, lang_src='en', lang_tgt=target_language)
+                if (source_language in through__language) and (target_language in through__language):
+                    temporary_language = 'en'
+                    tmp = translator.translate(line, lang_src=source_language, lang_tgt=temporary_language)
+                    result += translator.translate(tmp, lang_src=temporary_language, lang_tgt=target_language)
                 else:
                     result += translator.translate(line, lang_src=source_language, lang_tgt=target_language)
                 result += '\n'
@@ -344,6 +340,7 @@ def google_trans_new_translate(content_lines, source_language, target_language):
 def replace_mention(content):
     '''
     文字列に含まれる@everyone, @hereを一時的に置換する
+    データ上、@everyone, @hereはそれぞれ文字列になっている
     '''
     result = content
     replace_strings = {'@everyone':'<@!?901>', '@here':'<@!?902>'}
@@ -359,9 +356,12 @@ def replace_links(content, original_content):
     '''
     result = content
     # チャンネルリンク、ユーザ宛てメンション、ロール宛てメンションの置換
-    pattern_list = [r'<#\s?\d+>', r'<@\s?!?\s?\d+>', r'<@\s?&?\s?\d+>']
+    # データ上、チャンネルリンクは<#\d+>、ユーザあてメンションは<@!\d+>、ロール宛てメンションは<@&\d+>になっている
+    pattern_list = [r'<[#|＃]+[ |　]*\d+>',
+                    r'<[@|＠]+[ |　]*[!|！]+[ |　]*\d+>',
+                    r'<[@|＠]+[ |　]*[&|＆]+[ |　]*\d+>']
     for pattern in pattern_list:
-        c = re.compile(pattern, re.DOTALL | re.MULTILINE)
+        c = re.compile(pattern, re.DOTALL)
         target_iterator = c.finditer(content)
         original_iterator = c.finditer(original_content)
         if (target_iterator is not None) and (original_iterator is not None):
@@ -371,7 +371,8 @@ def replace_links(content, original_content):
                     if original_match is not None:
                         result = result.replace(target_match.group(), original_match.group())
     # @everyone, @hereの置換
-    replace_strings = {r'<@!+\s?\?+\s?901>':'@everyone', r'<@!+\s?\?+\s?902>':'@here'}
+    replace_strings = {r'<[@|＠]+[ |　]*[!|！]+[ |　]*[?|？]+[ |　]*901>':'@everyone',
+                       r'<[@|＠]+[ |　]*[!|！]+[ |　]*[?|？]+[ |　]*902>':'@here'}
     for key, value in replace_strings.items():
         result = re.sub(key, value, result)
     return result
